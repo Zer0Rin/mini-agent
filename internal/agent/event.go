@@ -16,6 +16,7 @@ const (
 	EventTurnStart           EventType = "turn_start"
 	EventTurnEnd             EventType = "turn_end"
 	EventMessageStart        EventType = "message_start"
+	EventMessageUpdate       EventType = "message_update" // 仅 assistant，流式增量
 	EventMessageEnd          EventType = "message_end"
 	EventToolExecutionStart  EventType = "tool_execution_start"
 	EventToolExecutionUpdate EventType = "tool_execution_update"
@@ -26,8 +27,11 @@ const (
 type Event struct {
 	Type EventType
 
-	// message_start / message_end
+	// message_start / message_end（message_update 时为空）
 	Message *llm.Message
+
+	// message_update：本次增量
+	Delta *llm.Delta
 
 	// tool_execution_*
 	ToolCallID string

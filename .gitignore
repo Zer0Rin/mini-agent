@@ -1,0 +1,33 @@
+# 密钥
+.env
+.env.*
+!.env.example
+
+# 数据
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Go
+/bin/
+/server
+/cli
+coverage.out
+
+# 前端
+web/node_modules/
+web/.next/
+web/next-env.d.ts
+web/*.tsbuildinfo
+
+.DS_Store
+
+# 本地浏览器验证产物
+.playwright-cli/
+output/
+
+__pycache__/
+
+# 本机 IDE 配置
+.idea/

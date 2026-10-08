@@ -27,6 +27,10 @@ type Tool struct {
 	Description string         // 给模型看的说明，写得好坏直接影响调用准确率
 	Parameters  map[string]any // JSON Schema
 
+	// Sequential 为 true 时，同一批里只要有这个工具，整批改为顺序执行
+	// （例如会修改文件、有先后依赖的工具）。
+	Sequential bool
+
 	Execute func(ctx context.Context, toolCallID string, args json.RawMessage, onUpdate UpdateFunc) (ToolResult, error)
 }
 

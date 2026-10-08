@@ -1,94 +1,95 @@
-// 命令行对话入口。
+// 命令行对话入口（直接使用 Agent，不经过 HTTP 服务）。
 //
-// 用法：
-//
-//	export DEEPSEEK_API_KEY=sk-xxx
+//	export DEEPSEEK_API_KEY=...
 //	go run ./cmd/cli
 package main
 
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"strings"
 
 	"github.com/Zer0Rin/mini-agent/internal/agent"
+	"github.com/Zer0Rin/mini-agent/internal/config"
 	"github.com/Zer0Rin/mini-agent/internal/llm"
 	"github.com/Zer0Rin/mini-agent/internal/tool"
 )
 
 func main() {
-	key := os.Getenv("DEEPSEEK_API_KEY")
-	if key == "" {
-		fmt.Fprintln(os.Stderr, "请先设置环境变量 DEEPSEEK_API_KEY")
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-
-	model := &llm.OpenAICompat{
-		BaseURL: envOr("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-		APIKey:  key,
-		Model:   envOr("DEEPSEEK_MODEL", "deepseek-flash"), // 和 nexus-agent 里用的模型名一致
-	}
-
-	cfg := agent.Config{
-		Model:        model,
-		SystemPrompt: "你是一个简洁的助手。需要实时信息时使用工具，不要编造。",
+	a := agent.New(agent.Config{
+		Model:        &llm.OpenAICompat{BaseURL: cfg.ModelBaseURL, APIKey: cfg.ModelAPIKey, Model: cfg.ModelName},
+		SystemPrompt: cfg.SystemPrompt,
 		Tools:        []agent.Tool{tool.Datetime()},
-		MaxTurns:     8,
-		OnEvent:      printEvent,
-	}
+		MaxTurns:     cfg.MaxTurns,
+	}, nil)
+	a.Subscribe(printEvent)
 
-	// Ctrl+C 取消当前这一轮，而不是直接杀掉进程
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
+	// Ctrl+C：运行中则中断这一轮，空闲时退出
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	go func() {
+		for range sig {
+			if a.IsRunning() {
+				a.Abort()
+			} else {
+				os.Exit(0)
+			}
+		}
+	}()
 
-	var history []llm.Message
 	in := bufio.NewScanner(os.Stdin)
-	fmt.Println("mini-agent 已启动，输入 exit 退出")
+	fmt.Println("mini-agent 已启动。输入 exit 退出，运行中按 Ctrl+C 中断。")
 	for {
 		fmt.Print("\n你> ")
 		if !in.Scan() {
 			return
 		}
 		text := strings.TrimSpace(in.Text())
-		if text == "" {
+		switch text {
+		case "":
 			continue
-		}
-		if text == "exit" {
+		case "exit":
 			return
 		}
-
-		newMsgs, err := agent.Loop(ctx, cfg, history, llm.Message{Role: llm.RoleUser, Content: text})
-		history = append(history, newMsgs...) // 出错也保留已产生的消息，下一轮还能接着聊
-		if err != nil {
-			fmt.Println("出错了:", err)
+		err := a.Prompt(context.Background(), llm.Message{Role: llm.RoleUser, Content: text})
+		switch {
+		case errors.Is(err, context.Canceled):
+			fmt.Println("\n（已中断）")
+		case err != nil:
+			fmt.Println("\n出错了:", err)
 		}
 	}
 }
 
-// printEvent 把事件打印到终端：看得到 Agent 每一步在做什么。
+// printEvent 流式打印：思考过程灰色显示，正文逐字输出，工具调用单独一行。
 func printEvent(_ context.Context, e agent.Event) {
+	const gray, reset = "\033[90m", "\033[0m"
 	switch e.Type {
+	case agent.EventMessageStart:
+		if e.Message.Role == llm.RoleAssistant {
+			fmt.Print("\nAgent> ")
+		}
+	case agent.EventMessageUpdate:
+		if e.Delta.Reasoning != "" {
+			fmt.Print(gray + e.Delta.Reasoning + reset)
+		}
+		fmt.Print(e.Delta.Content)
 	case agent.EventToolExecutionStart:
-		fmt.Printf("  ⚙ 调用 %s %s\n", e.ToolName, string(e.Args))
+		fmt.Printf("\n  ⚙ 调用 %s %s", e.ToolName, string(e.Args))
 	case agent.EventToolExecutionEnd:
 		mark := "✓"
 		if e.IsError {
 			mark = "✗"
 		}
-		fmt.Printf("  %s %s → %s\n", mark, e.ToolName, e.Result.Content)
-	case agent.EventMessageEnd:
-		if e.Message.Role == llm.RoleAssistant && e.Message.Content != "" {
-			fmt.Printf("\nAgent> %s\n", e.Message.Content)
-		}
+		fmt.Printf("\n  %s %s → %s\n", mark, e.ToolName, e.Result.Content)
 	}
-}
-
-func envOr(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
 }
